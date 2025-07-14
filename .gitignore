@@ -3,3 +3,5 @@ apex/
 *egg-info/
 outputs/
 *.log
+*.whl
+checkpoints/
