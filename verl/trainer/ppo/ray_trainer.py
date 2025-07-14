@@ -50,7 +50,7 @@ def dataprotoitem_to_dataproto(item: DataProtoItem) -> DataProto:
     """Convert a DataProtoItem to a DataProto object"""
     return DataProto.from_dict(
         tensors=item.batch,  # TensorDict is already in correct format
-        non_tensors=item.non_tensor_batch,  # Dict is already in correct format 
+        non_tensors=item.non_tensor_batch,  # Dict is already in correct format
         meta_info=item.meta_info
     )
 
@@ -563,10 +563,10 @@ class RayPPOTrainer(object):
                 validate_wg = self.actor_rollout_wg
             else:
                 validate_wg = self.rollout_wg
-            
+
             # pad to be divisible by dp_size
             test_batch_padded, pad_size = pad_dataproto_to_divisor(test_batch, validate_wg.world_size)
-            
+
             if self.config.actor_rollout_ref.rollout.async_engine:
                 gen_seq_generator = validate_wg.generate_sequences_async(prompts=test_batch_padded)
                 outputs = []
@@ -586,7 +586,7 @@ class RayPPOTrainer(object):
             output_ids = test_output_gen_batch.batch['responses']
             output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
             sample_outputs.extend(output_texts)
-            
+
             test_batch =  dataprotoitem_to_dataproto(test_output_gen_batch) #test_batch.union(test_output_gen_batch)
 
             # evaluate using reward_function
@@ -683,6 +683,7 @@ class RayPPOTrainer(object):
         all_wg = {}
         self.wg_dicts = []
         for resource_pool, class_dict in self.resource_pool_to_cls.items():
+            print(resource_pool, class_dict)
             worker_dict_cls = create_colocated_worker_cls(class_dict=class_dict)
             wg_dict = self.ray_worker_group_cls(resource_pool=resource_pool, ray_cls_with_init=worker_dict_cls)
             spawn_wg = wg_dict.spawn(prefix_set=class_dict.keys())
@@ -722,12 +723,12 @@ class RayPPOTrainer(object):
 
         actor_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(
             self.config.trainer.default_hdfs_dir, f'global_step_{self.global_steps}', 'actor')
-        
+
         if self.hybrid_engine:
             save_actor_cls = self.actor_rollout_wg
         else:
             save_actor_cls = self.actor_wg
-        
+
         save_actor_cls.save_checkpoint(actor_local_path,
                                               actor_remote_path,
                                               self.global_steps,
@@ -794,7 +795,7 @@ class RayPPOTrainer(object):
             load_actor_cls = self.actor_rollout_wg
         else:
             load_actor_cls = self.actor_wg
-            
+
         load_actor_cls.load_checkpoint(actor_path,
                                               del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
 
@@ -807,7 +808,7 @@ class RayPPOTrainer(object):
         # if not self.hybrid_engine:
         #     self.rollout_wg.load_checkpoint(actor_path,
         #                                           del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
-        
+
         # load critic
         if self.use_critic:
             self.critic_wg.load_checkpoint(critic_path,
@@ -934,7 +935,7 @@ class RayPPOTrainer(object):
                         for uid in unique_uids:
                             uid_mask = uids == uid
                             uid_rewards = reward_tensor[uid_mask].sum(-1)  # Sum rewards for each sequence
-                            
+
                             # Check if all rewards are 0 or all are 1 for this uid
                             if (uid_rewards == 0).all():
                                 valid_mask[uid_mask] = False
@@ -942,7 +943,7 @@ class RayPPOTrainer(object):
                             elif (uid_rewards == 1).all():
                                 valid_mask[uid_mask] = False
                                 solve_all += 1
-                        
+
                         # Log to metrics
                         metrics['batch/solve_none'] = solve_none
                         metrics['batch/solve_all'] = solve_all
@@ -955,7 +956,7 @@ class RayPPOTrainer(object):
                             # Keep track of valid samples and non-valid samples
                             valid_indices = torch.where(valid_mask)[0]
                             non_valid_indices = torch.where(~valid_mask)[0]
-                            
+
                             num_valid_samples = len(valid_indices)
                             # Calculate how many samples we need to add for a full batch
                             total_batch_size = self.config.data.train_batch_size * self.config.actor_rollout_ref.rollout.n
@@ -968,15 +969,15 @@ class RayPPOTrainer(object):
                                 # Randomly select from non-valid indices to use as padding
                                 padding_indices = non_valid_indices[torch.randperm(len(non_valid_indices))[:padding_samples]]
                                 combined_indices.extend(padding_indices.tolist())
-                            
+
                             # Create a new mask for the combined set of samples
                             final_mask = torch.zeros(len(batch.batch['input_ids']), dtype=torch.bool)
                             final_mask[combined_indices] = True
-                            
+
                             # Apply the mask to keep only selected samples
                             batch = batch[final_mask]
                             batch = dataprotoitem_to_dataproto(batch)
-                        
+
                         if self.config.actor_rollout_ref.rollout.enable_log_prob:
                             # Avoid recompute log_prob bugs. Log probs from vLLM. (Could be buggy)
                             batch.meta_info['micro_batch_size'] = self.config.actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu

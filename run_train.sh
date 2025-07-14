@@ -1,4 +1,4 @@
-PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo_pipeline \
+PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo_fullasync \
   algorithm.adv_estimator=grpo \
   data.train_files=../data/train.parquet \
   data.val_files=../data/test.parquet \
