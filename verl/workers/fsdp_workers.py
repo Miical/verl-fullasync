@@ -677,14 +677,15 @@ class ActorRolloutRefWorker(Worker):
                 prompts.meta_info.update(meta_info)
                 prompts = self.rollout_sharding_manager.preprocess_data(prompts)
 
-                print("before generate_sequences_once")
-
+                # print("before generate_sequences_once")
                 output = await self.rollout.generate_sequences_once(prompts=prompts)
+                # print(f"{idx} after generate_sequences_once")
 
-                print(f"{idx} after generate_sequences_once")
+                print(f"time: {time.time()}, pid: {os.getpid()}, idx: {idx}, get output from rollout")
 
                 output = self.rollout_sharding_manager.postprocess_data(output)
-                # return output.to('cpu')
+
+                ray.get(self.replay_queue.put.remote(output.to('cpu')))
 
 
         async def _generate_forever_batch():

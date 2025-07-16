@@ -82,11 +82,14 @@ class ResponsePool:
         self.queue = queue.Queue()
 
     def put(self, data):
+        # print(f"put data to response pool, data: {data}")
         self.queue.put(data)
 
     def get(self):
         return self.queue.get()
 
+    def qsize(self):
+        return self.queue.qsize()
 
 class RayPPOFullAsyncTrainer(RayPPOTrainer):
 
@@ -125,10 +128,10 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
         total_mini_batch_iters = 0
 
         dataset = list(self.train_dataloader)
-        print(f"!!!!dataset length: {len(dataset)}")
+        print("dataset length: ", len(dataset))
         input_pool = PromptPool.remote(dataset)
-        # output_pool = PromptPool.remote(self.train_dataloader)
-        self.rollout_wg.start_inference(input_pool, None)
+        output_pool = ResponsePool.remote()
+        self.rollout_wg.start_inference(input_pool, output_pool)
 
         while True:
             time.sleep(100000)
