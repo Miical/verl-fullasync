@@ -454,7 +454,7 @@ class RayPPOTrainer(object):
             train_batch_size = int(train_batch_size)
 
         self.train_dataloader = StatefulDataLoader(dataset=self.train_dataset,
-                                                   batch_size=train_batch_size,
+                                                   batch_size=1,
                                                    num_workers=8,
                                                    drop_last=True,
                                                    collate_fn=collate_fn,

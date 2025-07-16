@@ -82,16 +82,16 @@ def sleep(self, level: int = 1):
         The caller should guarantee that no requests are being processed
         during the sleep period, before `wake_up` is called.
 
-        :param level: The sleep level. Level 1 sleep will offload the model 
-            weights and discard the kv cache. The content of kv cache is 
-            forgotten. Level 1 sleep is good for sleeping and waking up the 
-            engine to run the same model again. The model weights are backed 
-            up in CPU memory. Please make sure there's enough CPU memory to 
-            store the model weights. Level 2 sleep will discard both the model 
-            weights and the kv cache. The content of both the model weights 
-            and kv cache is forgotten. Level 2 sleep is good for sleeping and 
-            waking up the engine to run a different model or update the model, 
-            where previous model weights are not needed. It reduces CPU memory 
+        :param level: The sleep level. Level 1 sleep will offload the model
+            weights and discard the kv cache. The content of kv cache is
+            forgotten. Level 1 sleep is good for sleeping and waking up the
+            engine to run the same model again. The model weights are backed
+            up in CPU memory. Please make sure there's enough CPU memory to
+            store the model weights. Level 2 sleep will discard both the model
+            weights and the kv cache. The content of both the model weights
+            and kv cache is forgotten. Level 2 sleep is good for sleeping and
+            waking up the engine to run a different model or update the model,
+            where previous model weights are not needed. It reduces CPU memory
             pressure.
         """
         self.engine.reset_prefix_cache()
@@ -118,7 +118,7 @@ class vLLMRollout(BaseRollout):
             model_hf_config: the huggingface config to initiallize the generating model in vllm
             **kwargs: train_tp, for Megatron Backend to initialize hybrid engine (zero redundancy) process group
         """
-        
+
         super().__init__()
         self.config = config
         assert not (not config.enforce_eager and config.free_cache_engine), \
@@ -128,10 +128,10 @@ class vLLMRollout(BaseRollout):
         assert tensor_parallel_size <= torch.distributed.get_world_size(), \
             "tensor parallel size should be less than or equal to the world size"
         max_num_batched_tokens = self.config.get('max_num_batched_tokens', 8192)
-        
+
         self.reward_fn = reward_fn
         self.val_reward_fn = val_reward_fn
-        
+
         if kwargs.get('train_tp', None) is not None:
             # deployed with megatron
             os.environ['CUDA_TIMER_STREAM_KAFKA_ENABLE'] = '0'
@@ -163,7 +163,7 @@ class vLLMRollout(BaseRollout):
                     enable_prefix_caching=False
                 )
             )
-        else:     
+        else:
             self.inference_engine = LLM(
                 model=model_path,
                 enable_sleep_mode=True,
@@ -206,17 +206,17 @@ class vLLMRollout(BaseRollout):
 
     async def generate_sequence_task(self, idx: int, prompt_tokens: Union[Dict[str, Any], List[int]], sampling_params: SamplingParams = None) -> Tuple[int, RequestOutput]:
         """Generate a sequence asynchronously using vLLM.
-        
+
         This method creates an asynchronous task for generating text from the given prompt tokens.
         It streams the outputs and returns the final result along with the original prompt index.
-        
+
         Args:
             idx: The index of the prompt in the original batch
             prompt_tokens: List of token IDs representing the input prompt
             sampling_params: Optional custom sampling parameters, defaults to self.sampling_params
-            
+
         Returns:
-            tuple: (idx, last_output) where idx is the original prompt index and 
+            tuple: (idx, last_output) where idx is the original prompt index and
                   last_output contains the generated sequence and related information
         """
         if sampling_params is None:
@@ -251,11 +251,11 @@ class vLLMRollout(BaseRollout):
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
         # Handle async engine case
-        if self.config.async_engine:
-            outputs = []
-            for output in self.generate_sequences_async(prompts):
-                outputs.append(output)
-            return DataProto.concat(outputs)
+        # if self.config.async_engine:
+        #     outputs = []
+        #     for output in self.generate_sequences_async(prompts):
+        #         outputs.append(output)
+        #     return DataProto.concat(outputs)
         # Rebuild vllm cache engine
         if vllm_version in ('0.3.1', '0.4.2', '0.5.4', '0.6.3') and self.config.free_cache_engine:
             self.inference_engine.init_cache_engine()
@@ -287,7 +287,7 @@ class vLLMRollout(BaseRollout):
             vllm_inputs = [{
                 'prompt_token_ids': raw_prompt_ids if raw_prompt_ids is not None else []
             } for raw_prompt_ids in non_tensor_batch.pop('raw_prompt_ids')]
-        
+
         vllm_inputs = [TokensPrompt(**vllm_input) for vllm_input in vllm_inputs]
 
         do_sample = prompts.meta_info.get('do_sample', True)
@@ -317,7 +317,7 @@ class vLLMRollout(BaseRollout):
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
                 use_tqdm=False)
-        
+
         # Extract token IDs and log probabilities
         response = []
         log_probs = []
@@ -332,7 +332,7 @@ class vLLMRollout(BaseRollout):
                     log_probs.append(log_prob_list)
                 else:
                     log_probs.append([0.0] * len(output.outputs[sample_id].token_ids))
-        
+
         response = pad_2d_list_to_length(response, self.pad_token_id,
                                          max_length=self.config.response_length).to(idx.device)
         if self.config.enable_log_prob:
@@ -380,11 +380,11 @@ class vLLMRollout(BaseRollout):
             batch_size=batch_size)
         if self.config.enable_log_prob:
             batch['old_log_probs'] = log_probs
-        
+
         # free vllm cache engine
         if vllm_version in ('0.3.1', '0.4.2', '0.5.4', '0.6.3') and self.config.free_cache_engine:
             self.inference_engine.free_cache_engine()
-        
+
         if self.reward_fn is not None and not is_validate:
             init_batch = DataProto(
                 batch=batch,
@@ -393,7 +393,7 @@ class vLLMRollout(BaseRollout):
             )
             reward_tensor = self.reward_fn(init_batch)
             batch['token_level_scores'] = reward_tensor
-        
+
         return DataProto(
             batch=batch,
             non_tensor_batch=non_tensor_batch,
@@ -401,13 +401,157 @@ class vLLMRollout(BaseRollout):
         )
 
     @torch.no_grad()
+    async def generate_sequences_once(self, prompts: DataProto, **kwargs):
+
+        assert self.config.async_engine, "generate_sequences_async requires async_engine=True"
+
+        idx = prompts.batch['input_ids']
+        attention_mask = prompts.batch['attention_mask']
+        position_ids = prompts.batch['position_ids']
+        eos_token_id = prompts.meta_info['eos_token_id']
+
+        batch_size = idx.size(0)
+        non_tensor_batch = prompts.non_tensor_batch
+        if 'raw_prompt_ids' not in non_tensor_batch or True:
+            non_tensor_batch['raw_prompt_ids'] = np.array(
+                [_pre_process_inputs(self.pad_token_id, idx[i]) for i in range(batch_size)], dtype=object)
+
+        if batch_size != len(non_tensor_batch['raw_prompt_ids']):
+            raise RuntimeError('vllm sharding manager is not work properly.')
+
+        if 'multi_modal_data' in non_tensor_batch:
+            vllm_inputs = []
+            for raw_prompt_ids, multi_modal_data in zip(non_tensor_batch.pop('raw_prompt_ids'),
+                                                        non_tensor_batch.pop('multi_modal_data')):
+                vllm_inputs.append({'prompt_token_ids': raw_prompt_ids, 'multi_modal_data': multi_modal_data})
+        else:
+            vllm_inputs = [{
+                'prompt_token_ids': raw_prompt_ids
+            } for raw_prompt_ids in non_tensor_batch.pop('raw_prompt_ids')]
+
+        do_sample = prompts.meta_info.get('do_sample', True)
+        is_validate = prompts.meta_info.get('validate', False)
+        if not do_sample:
+            kwargs = {
+                'best_of': 1,
+                'top_p': 1.0,
+                'top_k': -1,
+                'min_p': 0.0,
+                'temperature': 0,
+                'n': 1  # if greedy, only 1 response
+            }
+
+        if is_validate:
+            # TODO: try **
+            kwargs.update({
+                'top_k': self.config.val_kwargs.top_k,
+                'top_p': self.config.val_kwargs.top_p,
+                'temperature': self.config.val_kwargs.temperature,
+                'n': 1,  # if validate, already repeat in ray_trainer
+            })
+
+
+        updated_sampling_params = deepcopy(self.sampling_params)
+        for key, value in kwargs.items():
+            if hasattr(updated_sampling_params, key):
+                setattr(updated_sampling_params, key, value)
+
+        # Create all tasks
+        tasks = [
+            self.generate_sequence_task(prompt_idx, vllm_inputs[prompt_idx], updated_sampling_params) for prompt_idx in range(batch_size)
+        ]
+
+        prompt_idx, output = await tasks[0]
+
+        # Process output
+        response = []
+        log_probs = []
+        for sample_id in range(len(output.outputs)):
+            response.append(output.outputs[sample_id].token_ids)
+            if self.config.enable_log_prob and \
+                hasattr(output.outputs[sample_id], 'logprobs') and \
+                output.outputs[sample_id].logprobs is not None:
+                log_prob_list = []
+                for log_prob in output.outputs[sample_id].logprobs:
+                    log_prob_list.append(next(iter(log_prob.values())).logprob)
+                log_probs.append(log_prob_list)
+            else:
+                log_probs.append([0.0] * len(output.outputs[sample_id].token_ids))
+
+        response = pad_2d_list_to_length(response, self.pad_token_id,
+                                        max_length=self.config.response_length).to(idx.device)
+        log_probs = pad_2d_list_to_length(log_probs, 0.0,
+                                        max_length=self.config.response_length).to(idx.device)
+
+        # Process single sequence
+        single_idx = idx[prompt_idx:prompt_idx+1]
+        single_attention_mask = attention_mask[prompt_idx:prompt_idx+1]
+        single_position_ids = position_ids[prompt_idx:prompt_idx+1]
+        non_tensor_batch = {}
+        for key, val in prompts.non_tensor_batch.items():
+            # Get single value and repeat n times
+            single_val = val[prompt_idx:prompt_idx+1]
+            non_tensor_batch[key] = single_val
+        # Handle multiple samples per prompt when n > 1 and sampling
+        if self.config.n > 1 and do_sample:
+            single_idx = _repeat_interleave(single_idx, self.sampling_params.n)
+            single_attention_mask = _repeat_interleave(single_attention_mask, self.sampling_params.n)
+            single_position_ids = _repeat_interleave(single_position_ids, self.sampling_params.n)
+            # Create interleaved non_tensor_batch for this subset
+            for key, val in non_tensor_batch.items():
+                # Get single value and repeat n times
+                non_tensor_batch[key] = _repeat_interleave(val, self.sampling_params.n)
+
+        seq = torch.cat([single_idx, response], dim=-1)
+
+        response_length = response.size(1)
+        delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
+        delta_position_id = delta_position_id.unsqueeze(0).repeat(response.size(0), 1)
+        if position_ids.dim() == 3:  # qwen2vl mrope
+            delta_position_id = delta_position_id.view(response.size(0), 1, -1).expand(response.size(0), 3, -1)
+
+        response_position_ids = single_position_ids[:, -1:] + delta_position_id
+        position_ids_out = torch.cat([single_position_ids, response_position_ids], dim=-1)
+        response_attention_mask = get_eos_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
+        attention_mask_out = torch.cat((single_attention_mask, response_attention_mask), dim=-1)
+
+        batch = TensorDict(
+        {
+            'prompts': single_idx,
+            'responses': response,
+            'input_ids': seq,
+            'attention_mask': attention_mask_out,
+            'position_ids': position_ids_out
+        },
+        batch_size=response.size(0))
+        if self.config.enable_log_prob:
+            batch['old_log_probs'] = log_probs
+
+
+        if self.reward_fn is not None and not is_validate:
+            init_batch = DataProto(
+                batch=batch,
+                non_tensor_batch=non_tensor_batch,
+                meta_info=prompts.meta_info
+            )
+            reward_tensor = self.reward_fn(init_batch)
+            batch['token_level_scores'] = reward_tensor
+
+        return DataProto(
+            batch=batch,
+            non_tensor_batch=non_tensor_batch,
+            meta_info=prompts.meta_info
+        )
+
+
+    @torch.no_grad()
     def generate_sequences_async(self, prompts: DataProto, **kwargs):
         """Generator function that yields outputs as they complete (may be out of order).
-        
+
         Args:
             prompts: DataProto containing the input prompts
             **kwargs: Additional arguments to modify sampling parameters
-        
+
         Yields:
             tuple: (prompt_idx, DataProto) containing the original prompt index and its generated sequence
         """
@@ -451,7 +595,7 @@ class vLLMRollout(BaseRollout):
                 'temperature': 0,
                 'n': 1  # if greedy, only 1 response
             }
-        
+
         if is_validate:
             # TODO: try **
             kwargs.update({
@@ -474,7 +618,7 @@ class vLLMRollout(BaseRollout):
             ]
             for completed_task in asyncio.as_completed(tasks):
                 prompt_idx, output = await completed_task
-                
+
                 # Process output
                 response = []
                 log_probs = []
@@ -515,13 +659,13 @@ class vLLMRollout(BaseRollout):
                         non_tensor_batch[key] = _repeat_interleave(val, self.sampling_params.n)
 
                 seq = torch.cat([single_idx, response], dim=-1)
-                
+
                 response_length = response.size(1)
                 delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
                 delta_position_id = delta_position_id.unsqueeze(0).repeat(response.size(0), 1)
                 if position_ids.dim() == 3:  # qwen2vl mrope
                     delta_position_id = delta_position_id.view(response.size(0), 1, -1).expand(response.size(0), 3, -1)
-                
+
                 response_position_ids = single_position_ids[:, -1:] + delta_position_id
                 position_ids_out = torch.cat([single_position_ids, response_position_ids], dim=-1)
                 response_attention_mask = get_eos_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
@@ -538,8 +682,8 @@ class vLLMRollout(BaseRollout):
                     batch_size=response.size(0))
                 if self.config.enable_log_prob:
                     batch['old_log_probs'] = log_probs
-                
-                
+
+
                 if self.reward_fn is not None and not is_validate:
                     init_batch = DataProto(
                         batch=batch,
@@ -548,7 +692,7 @@ class vLLMRollout(BaseRollout):
                     )
                     reward_tensor = self.reward_fn(init_batch)
                     batch['token_level_scores'] = reward_tensor
-                
+
                 yield DataProto(
                     batch=batch,
                     non_tensor_batch=non_tensor_batch,

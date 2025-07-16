@@ -9,6 +9,7 @@ import queue
 
 import numpy as np
 from verl import DataProto
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 from verl.trainer.ppo.ray_trainer import (
     RayPPOTrainer,
@@ -56,6 +57,37 @@ class SortedQueue(queue.PriorityQueue):
         """Retrieve and return the highest-priority item."""
         return super().get()[1]
 
+import ray
+import queue
+
+def get_dataset_generator(dataset):
+    while True:
+        for batch_dict in dataset:
+            batch: DataProto = DataProto.from_single_dict(batch_dict)
+            batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
+            yield batch
+
+@ray.remote
+class PromptPool:
+    def __init__(self, dataset):
+        self.generator = get_dataset_generator(dataset)
+
+    def get(self):
+        return next(self.generator)
+
+
+@ray.remote
+class ResponsePool:
+    def __init__(self):
+        self.queue = queue.Queue()
+
+    def put(self, data):
+        self.queue.put(data)
+
+    def get(self):
+        return self.queue.get()
+
+
 class RayPPOFullAsyncTrainer(RayPPOTrainer):
 
     def fit(self):
@@ -91,6 +123,16 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
         self.global_steps += 1
         replay_queue = SortedQueue() #queue.Queue()
         total_mini_batch_iters = 0
+
+        dataset = list(self.train_dataloader)
+        print(f"!!!!dataset length: {len(dataset)}")
+        input_pool = PromptPool.remote(dataset)
+        # output_pool = PromptPool.remote(self.train_dataloader)
+        self.rollout_wg.start_inference(input_pool, None)
+
+        while True:
+            time.sleep(100000)
+
         for epoch in range(self.config.trainer.total_epochs):
             for batch_iter, batch_dict in enumerate(self.train_dataloader):
                 metrics = {}

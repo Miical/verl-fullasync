@@ -43,6 +43,9 @@ from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 from codetiming import Timer
+from torchdata.stateful_dataloader import StatefulDataLoader
+import asyncio
+import time
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_PPO_LOGGING_LEVEL', 'WARN'))
@@ -99,6 +102,7 @@ class ActorRolloutRefWorker(Worker):
         self.reward_config = reward_config
 
         self.role = role
+        print(f"!!!!!!!!!!!!!!!role: {self.role}")
         assert self.role in ['actor', 'rollout', 'ref', 'actor_rollout', 'actor_rollout_ref']
 
         self._is_actor = self.role in ['actor', 'actor_rollout', 'actor_rollout_ref']
@@ -319,7 +323,7 @@ class ActorRolloutRefWorker(Worker):
                 raise NotImplementedError
             self.reward_fn = reward_manager_cls(tokenizer=self.tokenizer, num_examine=0)
             self.val_reward_fn = reward_manager_cls(tokenizer=self.tokenizer, num_examine=1)
-        
+
         rollout_name = self.config.rollout.name
         if rollout_name == 'hf':
             from verl.workers.rollout import HFRollout
@@ -542,7 +546,7 @@ class ActorRolloutRefWorker(Worker):
 
             output = self.ulysses_sharding_manager.postprocess_data(data=output)
             output = output.to('cpu')
-        
+
         if self._is_offload_param:
             offload_fsdp_model_to_cpu(self.actor_module_fsdp)
         if self._is_offload_optimizer:
@@ -587,7 +591,7 @@ class ActorRolloutRefWorker(Worker):
 
             output = self.ulysses_sharding_manager.postprocess_data(data=output)
             output = output.to('cpu')
-        
+
         if self._is_offload_param:
             offload_fsdp_model_to_cpu(self.actor_module_fsdp)
         if self._is_offload_optimizer:
@@ -635,26 +639,94 @@ class ActorRolloutRefWorker(Worker):
         log_gpu_memory_usage('After recompute log prob', logger=logger)
         return output
 
+
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL, execute_mode=Execute.ALL, blocking=True)
+    def start_inference(self, dataset, replay_queue):
+        self.dataset = dataset
+        self.replay_queue = replay_queue
+
+        if self._is_offload_param:
+            load_fsdp_model_to_gpu(self.actor_module_fsdp)
+
+        self.rollout_sharding_manager.__enter__()
+
+        # after parameters sync with rollout, offload actor model to CPU
+        if self._is_offload_param:
+            offload_fsdp_model_to_cpu(self.actor_module_fsdp)
+        if self._is_offload_optimizer:
+            offload_fsdp_optimizer(optimizer=self.actor_optimizer)
+
+        log_gpu_memory_usage('After entering rollout sharding manager', logger=logger)
+
+        async def _generate_forever(idx):
+            while True:
+                prompts = ray.get(self.dataset.get.remote())
+
+                print("before prompts.to(torch.cuda.current_device())")
+
+                prompts = prompts.to(torch.cuda.current_device())
+                meta_info = {
+                    'eos_token_id':
+                        self.generation_config.eos_token_id
+                        if self.generation_config is not None else self.tokenizer.eos_token_id,
+                    'pad_token_id':
+                        self.generation_config.pad_token_id
+                        if self.generation_config is not None else self.tokenizer.pad_token_id,
+                }
+                prompts.meta_info.update(meta_info)
+                prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+
+                print("before generate_sequences_once")
+
+                output = await self.rollout.generate_sequences_once(prompts=prompts)
+
+                print(f"{idx} after generate_sequences_once")
+
+                output = self.rollout_sharding_manager.postprocess_data(output)
+                # return output.to('cpu')
+
+
+        async def _generate_forever_batch():
+            tasks = []
+            for i in range(4):
+                tasks.append(asyncio.create_task(_generate_forever(i)))
+            await asyncio.gather(*tasks)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            loop.run_until_complete(_generate_forever_batch())
+        except Exception as e:
+            print(e)
+        finally:
+            self.rollout_sharding_manager.__exit__(None, None, None)
+            torch.cuda.empty_cache()
+            log_gpu_memory_usage('After generate sequences', logger=logger)
+            loop.close()
+
+
     @register(dispatch_mode=Dispatch.GENERATOR, execute_mode=Execute.ALL, blocking=True)
     def generate_sequences_async(self, prompts: DataProto = None, **kwargs):
         """Generator function that yields outputs as they complete.
-        
+
         Args:
             prompts: DataProto containing the input prompts
             **kwargs: Additional arguments to modify sampling parameters
-            
+
         Yields:
             DataProto: Generated sequence outputs as they complete
         """
         assert self._is_rollout, "generate_sequences_async requires rollout capability"
         assert hasattr(self.rollout, 'generate_sequences_async'), "Rollout engine must support generate_sequences_async"
-        
+
         if not hasattr(self, '_generator'):
             self._generator = None
-        
+
         if prompts is None and self._generator is None:
             return None
-        
+
         if self._generator is None:
             if self._is_offload_param:
                 load_fsdp_model_to_gpu(self.actor_module_fsdp)
@@ -670,7 +742,7 @@ class ActorRolloutRefWorker(Worker):
             }
             prompts.meta_info.update(meta_info)
             self.rollout_sharding_manager.__enter__()
-            
+
             # after parameters sync with rollout, offload actor model to CPU
             if self._is_offload_param:
                 offload_fsdp_model_to_cpu(self.actor_module_fsdp)
@@ -678,7 +750,7 @@ class ActorRolloutRefWorker(Worker):
                 offload_fsdp_optimizer(optimizer=self.actor_optimizer)
 
             log_gpu_memory_usage('After entering rollout sharding manager', logger=logger)
-            
+
             prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             self._generator = self.rollout.generate_sequences_async(prompts=prompts, **kwargs)
             return None
@@ -777,11 +849,11 @@ class ActorRolloutRefWorker(Worker):
     def update_rollout_actor_module(self, new_state_dict_ref):
         """
         Update the rollout worker’s actor_module_fsdp with the new FSDP-wrapped actor module.
-        This function handles the case where the new module is on a different GPU and may have a 
+        This function handles the case where the new module is on a different GPU and may have a
         different dtype. We extract a full state dict from the new module (offloaded to CPU),
         convert it to the local module's expected dtype, load it into our local actor_module_fsdp,
         and then recreate the rollout instance to use the updated module.
-        
+
         Args:
             new_actor_module_fsdp: The new FSDP-wrapped actor module (possibly on a different GPU).
         """
@@ -846,7 +918,7 @@ class ActorRolloutRefWorker(Worker):
                                                 hdfs_path=hdfs_path,
                                                 global_step=global_step,
                                                 remove_previous_ckpt=remove_previous_ckpt)
-        
+
         torch.distributed.barrier()
 
         # TODO: support DCP and save sharded checkpoints
