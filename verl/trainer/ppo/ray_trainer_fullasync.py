@@ -131,9 +131,10 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
         print("dataset length: ", len(dataset))
         input_pool = PromptPool.remote(dataset)
         output_pool = ResponsePool.remote()
-        inference_thread = threading.Thread(target=self.rollout_wg.start_inference, args=(input_pool, output_pool))
-        inference_thread.start()
-        # self.rollout_wg.start_inference(input_pool, output_pool)
+        # inference_thread = threading.Thread(target=self.rollout_wg.start_inference, args=(input_pool, output_pool))
+        # inference_thread.start()
+
+        self.rollout_wg.start_inference(input_pool, output_pool)
 
         train_batch_size = self.config.data.train_batch_size
         total_batch = len(dataset) // train_batch_size
@@ -141,7 +142,7 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
 
         for epoch in range(self.config.trainer.total_epochs):
             for batch_iter in range(total_batch):
-                print(f"[{batch_iter}/{total_batch}] start to generate batch")
+                print(f"[{batch_iter + 1}/{total_batch}] start to generate batch")
                 metrics = {}
                 timing_raw = {}
                 # batch: DataProto = DataProto.from_single_dict(batch_dict)
@@ -152,10 +153,9 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
                         with Timer('gen', timing_raw):
                             gen_idx = 0
                             while True:
-                                while ray.get(output_pool.qsize.remote()) == 0:
+                                while ray.get(output_pool.qsize.remote()) == 0 or q.qsize() > 200:
                                     time.sleep(0.1)
                                 item = ray.get(output_pool.get.remote())
-                                print(f"put item to replay queue: {gen_idx}")
                                 q.put((batch_iter, gen_idx, item))
                                 gen_idx = (gen_idx + 1) % train_batch_size
 
@@ -172,9 +172,8 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
                     # Initialize Empty data proto
                     training_batch = []
 
-                    print("okkkkkkkkk! start to generate mini batch")
                     for mini_batch_iter in range(num_loops):
-                        print("dsajiofjoiasjfoidsjafoijo")
+                        print(f"[{mini_batch_iter + 1}/{num_loops}] start to generate mini batch")
 
                         if mini_batch_iter == num_loops - 1:
                             while True:
@@ -268,6 +267,7 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
                         update_metrics(metrics, mini_batch_metrics)
                         total_mini_batch_iters += 1
 
+                    print("!!!!!!!!!!!!!! start to update rollout")
                     # last_iter_mini_batch_iter = (mini_batch_iter + last_iter_mini_batch_iter - 1) % ppo_step_minibatch_iter
                     with Timer('rollout_model_update', timing_raw):
                         updated_actor_module_fsdp_ref = self.actor_wg.get_state_dict()
@@ -275,6 +275,8 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
                             updated_actor_module_fsdp_ref = updated_actor_module_fsdp_ref[0]
                         self.rollout_wg.update_rollout_actor_module(updated_actor_module_fsdp_ref)
                     training_batch = DataProto.concat(training_batch)
+
+                    print("!!!!!!!!!!!!!! end to update rollout")
 
                     # Validate
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \

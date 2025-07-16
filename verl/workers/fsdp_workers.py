@@ -46,6 +46,7 @@ from codetiming import Timer
 from torchdata.stateful_dataloader import StatefulDataLoader
 import asyncio
 import time
+import threading
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_PPO_LOGGING_LEVEL', 'WARN'))
@@ -661,9 +662,12 @@ class ActorRolloutRefWorker(Worker):
 
         async def _generate_forever(idx):
             while True:
+                while ray.get(self.replay_queue.qsize.remote()) > 100:
+                    time.sleep(0.5)
+
                 prompts = ray.get(self.dataset.get.remote())
 
-                print("before prompts.to(torch.cuda.current_device())")
+                # print("before prompts.to(torch.cuda.current_device())")
 
                 prompts = prompts.to(torch.cuda.current_device())
                 meta_info = {
@@ -681,7 +685,7 @@ class ActorRolloutRefWorker(Worker):
                 output = await self.rollout.generate_sequences_once(prompts=prompts)
                 # print(f"{idx} after generate_sequences_once")
 
-                print(f"time: {time.time()}, pid: {os.getpid()}, idx: {idx}, get output from rollout")
+                # print(f"time: {time.time()}, pid: {os.getpid()}, idx: {idx}, get output from rollout")
 
                 output = self.rollout_sharding_manager.postprocess_data(output)
 
@@ -694,18 +698,22 @@ class ActorRolloutRefWorker(Worker):
                 tasks.append(asyncio.create_task(_generate_forever(i)))
             await asyncio.gather(*tasks)
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        def start_generate_forever_batch():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-        try:
-            loop.run_until_complete(_generate_forever_batch())
-        except Exception as e:
-            print(e)
-        finally:
-            self.rollout_sharding_manager.__exit__(None, None, None)
-            torch.cuda.empty_cache()
-            log_gpu_memory_usage('After generate sequences', logger=logger)
-            loop.close()
+            try:
+                loop.run_until_complete(_generate_forever_batch())
+            except Exception as e:
+                print(e)
+            finally:
+                self.rollout_sharding_manager.__exit__(None, None, None)
+                torch.cuda.empty_cache()
+                log_gpu_memory_usage('After generate sequences', logger=logger)
+                loop.close()
+
+        self.thread = threading.Thread(target=start_generate_forever_batch)
+        self.thread.start()
 
 
     @register(dispatch_mode=Dispatch.GENERATOR, execute_mode=Execute.ALL, blocking=True)
