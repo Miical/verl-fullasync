@@ -681,7 +681,7 @@ class ActorRolloutRefWorker(Worker):
                 prompts.meta_info.update(meta_info)
                 prompts = self.rollout_sharding_manager.preprocess_data(prompts)
 
-                # print("before generate_sequences_once")
+                # print(f"before generate_sequences_once")
                 output = await self.rollout.generate_sequences_once(prompts=prompts)
                 # print(f"{idx} after generate_sequences_once")
 
@@ -712,8 +712,8 @@ class ActorRolloutRefWorker(Worker):
                 log_gpu_memory_usage('After generate sequences', logger=logger)
                 loop.close()
 
-        self.thread = threading.Thread(target=start_generate_forever_batch)
-        self.thread.start()
+        self.generate_forever_thread = threading.Thread(target=start_generate_forever_batch, daemon=False)
+        self.generate_forever_thread.start()
 
 
     @register(dispatch_mode=Dispatch.GENERATOR, execute_mode=Execute.ALL, blocking=True)

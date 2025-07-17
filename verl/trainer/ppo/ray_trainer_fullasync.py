@@ -124,7 +124,7 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
 
         # we start from step 1
         self.global_steps += 1
-        replay_queue = SortedQueue() #queue.Queue()
+        replay_queue = queue.Queue()
         total_mini_batch_iters = 0
 
         dataset = list(self.train_dataloader)
@@ -140,6 +140,19 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
         total_batch = len(dataset) // train_batch_size
         print("total_batch: ", total_batch)
 
+        def create_replay_queue(output_pool, q):
+            while True:
+                while ray.get(output_pool.qsize.remote()) == 0 or q.qsize() > 200:
+                    time.sleep(0.1)
+                item = ray.get(output_pool.get.remote())
+                q.put(item)
+
+        # Get the generator function which will yield results as they complete
+        # gen_seq_generator = self.rollout_wg.generate_sequences_async(prompts=batch)
+        thread = threading.Thread(target=create_replay_queue, args=(output_pool, replay_queue))
+        thread.start()
+
+
         for epoch in range(self.config.trainer.total_epochs):
             for batch_iter in range(total_batch):
                 print(f"[{batch_iter + 1}/{total_batch}] start to generate batch")
@@ -149,21 +162,6 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
                 # batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
 
                 with Timer('step', timing_raw):
-                    def create_replay_queue(output_pool, q):
-                        with Timer('gen', timing_raw):
-                            gen_idx = 0
-                            while True:
-                                while ray.get(output_pool.qsize.remote()) == 0 or q.qsize() > 200:
-                                    time.sleep(0.1)
-                                item = ray.get(output_pool.get.remote())
-                                q.put((batch_iter, gen_idx, item))
-                                gen_idx = (gen_idx + 1) % train_batch_size
-
-                    # Get the generator function which will yield results as they complete
-                    # gen_seq_generator = self.rollout_wg.generate_sequences_async(prompts=batch)
-                    thread = threading.Thread(target=create_replay_queue, args=(output_pool, replay_queue))
-                    thread.start()
-
                     ppo_train_batch_size = self.config.data.train_batch_size
                     ppo_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
                     assert ppo_train_batch_size % ppo_mini_batch_size == 0, "PPO mini batch size must be a divisor of the total training batch size"
@@ -187,7 +185,7 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
                         with Timer('pipeline_gen', timing_raw):
                             outputs = []
                             for _ in range(ppo_mini_batch_size):
-                                _, _, output = replay_queue.get()
+                                output = replay_queue.get()
                                 outputs.append(output)
                             mini_batch = DataProto.concat(outputs)
                         end_time = time.perf_counter()
