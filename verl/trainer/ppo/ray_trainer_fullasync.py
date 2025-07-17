@@ -91,6 +91,21 @@ class ResponsePool:
     def qsize(self):
         return self.queue.qsize()
 
+@ray.remote
+class StatePool:
+    def __init__(self):
+        self.states = []
+
+    def put(self, num):
+        num_list = [i for i in range(num)]
+        self.states.extend(num_list)
+
+    def should_update(self, idx):
+        ret = idx in self.states
+        if ret:
+            self.states.remove(idx)
+        return ret
+
 class RayPPOFullAsyncTrainer(RayPPOTrainer):
 
     def fit(self):
@@ -131,10 +146,11 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
         print("dataset length: ", len(dataset))
         input_pool = PromptPool.remote(dataset)
         output_pool = ResponsePool.remote()
+        state_pool = StatePool.remote()
         # inference_thread = threading.Thread(target=self.rollout_wg.start_inference, args=(input_pool, output_pool))
         # inference_thread.start()
 
-        self.rollout_wg.start_inference(input_pool, output_pool)
+        self.rollout_wg.start_inference(input_pool, output_pool, state_pool)
 
         train_batch_size = self.config.data.train_batch_size
         total_batch = len(dataset) // train_batch_size
@@ -265,16 +281,15 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
                         update_metrics(metrics, mini_batch_metrics)
                         total_mini_batch_iters += 1
 
-                    print("!!!!!!!!!!!!!! start to update rollout")
                     # last_iter_mini_batch_iter = (mini_batch_iter + last_iter_mini_batch_iter - 1) % ppo_step_minibatch_iter
                     with Timer('rollout_model_update', timing_raw):
                         updated_actor_module_fsdp_ref = self.actor_wg.get_state_dict()
                         if isinstance(updated_actor_module_fsdp_ref, list):
                             updated_actor_module_fsdp_ref = updated_actor_module_fsdp_ref[0]
                         self.rollout_wg.update_rollout_actor_module(updated_actor_module_fsdp_ref)
+                        ray.get(state_pool.put.remote(2))
                     training_batch = DataProto.concat(training_batch)
 
-                    print("!!!!!!!!!!!!!! end to update rollout")
 
                     # Validate
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \

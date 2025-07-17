@@ -643,9 +643,10 @@ class ActorRolloutRefWorker(Worker):
 
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL, execute_mode=Execute.ALL, blocking=True)
-    def start_inference(self, dataset, replay_queue):
+    def start_inference(self, dataset, replay_queue, state_pool):
         self.dataset = dataset
         self.replay_queue = replay_queue
+        self.state_pool = state_pool
 
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
@@ -664,6 +665,10 @@ class ActorRolloutRefWorker(Worker):
             while True:
                 while ray.get(self.replay_queue.qsize.remote()) > 100:
                     time.sleep(0.5)
+
+                if idx == 0 and ray.get(state_pool.should_update.remote(self.rank)):
+                    self.rollout_sharding_manager.__enter__()
+                    print(f"rank {self.rank} has updated")
 
                 prompts = ray.get(self.dataset.get.remote())
 
