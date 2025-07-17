@@ -23,7 +23,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo_fullasync \
   trainer.n_training_gpus_per_node=2 \
   trainer.nnodes=1 \
   trainer.save_freq=10 \
-  trainer.test_freq=10 \
+  trainer.test_freq=1 \
   trainer.total_epochs=15 2>&1 | tee verl_demo.log
 
   #critic.optim.lr=1e-5 \

@@ -663,7 +663,7 @@ class ActorRolloutRefWorker(Worker):
 
         async def _generate_forever(idx):
             while True:
-                while ray.get(self.replay_queue.qsize.remote()) > 100:
+                while ray.get(self.replay_queue.qsize.remote()) > 400:
                     time.sleep(0.5)
 
                 if idx == 0 and ray.get(state_pool.should_update.remote(self.rank)):
@@ -699,7 +699,7 @@ class ActorRolloutRefWorker(Worker):
 
         async def _generate_forever_batch():
             tasks = []
-            for i in range(4):
+            for i in range(32):
                 tasks.append(asyncio.create_task(_generate_forever(i)))
             await asyncio.gather(*tasks)
 

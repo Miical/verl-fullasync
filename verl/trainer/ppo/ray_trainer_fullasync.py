@@ -158,7 +158,7 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
 
         def create_replay_queue(output_pool, q):
             while True:
-                while ray.get(output_pool.qsize.remote()) == 0 or q.qsize() > 200:
+                while ray.get(output_pool.qsize.remote()) == 0 or q.qsize() > 512:
                     time.sleep(0.1)
                 item = ray.get(output_pool.get.remote())
                 q.put(item)
@@ -171,7 +171,7 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
 
         for epoch in range(self.config.trainer.total_epochs):
             for batch_iter in range(total_batch):
-                print(f"[{batch_iter + 1}/{total_batch}] start to generate batch")
+                print(f"epoch {epoch} [{batch_iter + 1}/{total_batch}] start to generate batch (global_steps: {self.global_steps})")
                 metrics = {}
                 timing_raw = {}
                 # batch: DataProto = DataProto.from_single_dict(batch_dict)
@@ -187,7 +187,7 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
                     training_batch = []
 
                     for mini_batch_iter in range(num_loops):
-                        print(f"[{mini_batch_iter + 1}/{num_loops}] start to generate mini batch")
+                        print(f"epoch {epoch} batch {batch_iter + 1} [{mini_batch_iter + 1}/{num_loops}] start to generate mini batch")
 
                         if mini_batch_iter == num_loops - 1:
                             while True:
@@ -292,14 +292,17 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
 
 
                     # Validate
-                    if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \
-                        self.global_steps % self.config.trainer.test_freq == 0:
-                        with Timer('testing', timing_raw):
-                            val_metrics: dict = self._validate()
-                        metrics.update(val_metrics)
+                    # Bug
+                    # if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \
+                    #     self.global_steps % self.config.trainer.test_freq == 0:
+                    #     print("start to validate")
+                    #     with Timer('testing', timing_raw):
+                    #         val_metrics: dict = self._validate()
+                    #     metrics.update(val_metrics)
 
                     if self.config.trainer.save_freq > 0 and \
                             self.global_steps % self.config.trainer.save_freq == 0:
+                        print("start to save checkpoint")
                         with Timer('save_checkpoint', timing_raw):
                             self._save_checkpoint()
 
