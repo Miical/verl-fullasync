@@ -103,7 +103,6 @@ class ActorRolloutRefWorker(Worker):
         self.reward_config = reward_config
 
         self.role = role
-        print(f"!!!!!!!!!!!!!!!role: {self.role}")
         assert self.role in ['actor', 'rollout', 'ref', 'actor_rollout', 'actor_rollout_ref']
 
         self._is_actor = self.role in ['actor', 'actor_rollout', 'actor_rollout_ref']
@@ -643,7 +642,7 @@ class ActorRolloutRefWorker(Worker):
 
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL, execute_mode=Execute.ALL, blocking=True)
-    def start_inference(self, dataset, replay_queue, state_pool):
+    def start_inference(self, dataset, replay_queue, state_pool, train_batch_size, rollout_number):
         self.dataset = dataset
         self.replay_queue = replay_queue
         self.state_pool = state_pool
@@ -663,7 +662,7 @@ class ActorRolloutRefWorker(Worker):
 
         async def _generate_forever(idx):
             while True:
-                while ray.get(self.replay_queue.qsize.remote()) > 400:
+                while ray.get(self.replay_queue.qsize.remote()) > train_batch_size // self.world_size:
                     time.sleep(0.5)
 
                 if idx == 0 and ray.get(state_pool.should_update.remote(self.rank)):
@@ -699,8 +698,10 @@ class ActorRolloutRefWorker(Worker):
 
         async def _generate_forever_batch():
             tasks = []
-            for i in range(32):
+            local_rollout_number = rollout_number // self.world_size
+            for i in range(local_rollout_number):
                 tasks.append(asyncio.create_task(_generate_forever(i)))
+            print(f"{local_rollout_number} rollout coroutines have been created")
             await asyncio.gather(*tasks)
 
         def start_generate_forever_batch():
@@ -717,7 +718,7 @@ class ActorRolloutRefWorker(Worker):
                 log_gpu_memory_usage('After generate sequences', logger=logger)
                 loop.close()
 
-        self.generate_forever_thread = threading.Thread(target=start_generate_forever_batch, daemon=False)
+        self.generate_forever_thread = threading.Thread(target=start_generate_forever_batch)
         self.generate_forever_thread.start()
 
 

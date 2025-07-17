@@ -143,22 +143,21 @@ class RayPPOFullAsyncTrainer(RayPPOTrainer):
         total_mini_batch_iters = 0
 
         dataset = list(self.train_dataloader)
-        print("dataset length: ", len(dataset))
         input_pool = PromptPool.remote(dataset)
         output_pool = ResponsePool.remote()
         state_pool = StatePool.remote()
         # inference_thread = threading.Thread(target=self.rollout_wg.start_inference, args=(input_pool, output_pool))
         # inference_thread.start()
 
-        self.rollout_wg.start_inference(input_pool, output_pool, state_pool)
+        self.rollout_wg.start_inference(input_pool, output_pool, state_pool, self.config.data.train_batch_size,
+                                        self.config.actor_rollout_ref.actor.ppo_mini_batch_size)
 
         train_batch_size = self.config.data.train_batch_size
         total_batch = len(dataset) // train_batch_size
-        print("total_batch: ", total_batch)
 
         def create_replay_queue(output_pool, q):
             while True:
-                while ray.get(output_pool.qsize.remote()) == 0 or q.qsize() > 512:
+                while ray.get(output_pool.qsize.remote()) == 0 or q.qsize() > train_batch_size * 2:
                     time.sleep(0.1)
                 item = ray.get(output_pool.get.remote())
                 q.put(item)
